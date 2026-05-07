@@ -17,6 +17,11 @@ sudo ./uninstall.sh  # removes binary and service unit (preserves /etc/execguard
 
 ## Running (development)
 
+```sh
+make run-dev   # runs against execguard.dev.ini (create from execguard.example.ini)
+make test      # runs pytest
+```
+
 Reload config without restart (SIGHUP):
 ```sh
 sudo kill -HUP <pid>

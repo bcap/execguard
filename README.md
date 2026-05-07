@@ -32,9 +32,12 @@ sudo ./uninstall.sh
 
 ### Development (no systemd)
 
+Create a local config file, then run:
+
 ```sh
-uv sync
-sudo uv run execguard
+cp execguard.example.ini execguard.dev.ini
+# edit execguard.dev.ini as needed
+make run-dev
 ```
 
 ## Config (`/etc/execguard.ini`)
