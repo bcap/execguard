@@ -1,22 +1,22 @@
-"""CLI entry point, signal handling, test mode, and event loop."""
+"""CLI entry point, signal handling, test mode, and daemon loop."""
 
 import argparse
 import logging
 import os
+import select as _select
 import signal
-import struct
 import sys
+import time
 from datetime import datetime
 
 from .config import (
-    load_config, is_permitted, _matching_entries,
+    load_config, _matching_entries,
     _classify_token, _expand_name_list, _MONTH_NAMES,
+    Rule,
 )
-from .fanotify import (
-    make_fan_fd, setup_watches,
-    FAN_OPEN_EXEC_PERM, FAN_ALLOW, FAN_DENY,
-    EVENT_FMT, EVENT_SIZE, RESP_FMT,
-)
+from .fanotify import make_fan_fd, setup_watches
+from .blocker import handle_exec_events
+from .monitor import scan_and_kill
 
 DEFAULT_CONFIG_PATH = "/etc/execguard.ini"
 
@@ -175,6 +175,9 @@ def main() -> None:
     signal.signal(signal.SIGHUP, handle_sighup)
     log.info(f"watching {len(rules)} binaries from {args.config}")
 
+    tracked: dict[int, tuple[str, float | None]] = {}
+    last_scan = 0.0
+
     while True:
         if reload_flag:
             reload_flag = False
@@ -185,54 +188,28 @@ def main() -> None:
             else:
                 os.close(fan_fd)
                 rules = new_rules
+                tracked.clear()
                 fan_fd = make_fan_fd()
                 setup_watches(fan_fd, list(rules.keys()))
                 log.info(f"config reloaded, watching {len(rules)} binaries")
+
+        try:
+            ready, _, _ = _select.select([fan_fd], [], [], 1.0)
+        except InterruptedError:
+            continue
+
+        now = datetime.now()
+        now_mono = time.monotonic()
+        if now_mono - last_scan >= 1.0:
+            scan_and_kill(rules, tracked, now, args.dry_run)
+            last_scan = now_mono
+
+        if not ready:
+            continue
 
         try:
             data = os.read(fan_fd, 4096)
         except InterruptedError:
             continue
 
-        offset = 0
-        while offset + EVENT_SIZE <= len(data):
-            ev = struct.unpack_from(EVENT_FMT, data, offset)
-            event_len, _, _, _, mask, ev_fd, pid = ev
-            offset += event_len
-
-            if not (mask & FAN_OPEN_EXEC_PERM):
-                if ev_fd >= 0:
-                    os.close(ev_fd)
-                continue
-
-            try:
-                path = os.readlink(f"/proc/self/fd/{ev_fd}")
-            except OSError:
-                path = ""
-
-            rule = rules.get(path)
-            now = datetime.now()
-            permitted = is_permitted(rule, now) if rule else True
-            soft = args.dry_run or (rule is not None and rule.log_only)
-            ts = now.strftime("%H:%M")
-            matched = _matching_entries(rule, now) if rule else []
-            if matched:
-                verb = "allow" if rule.mode == "allowed" else "deny"
-                rule_suffix = f" [{verb} rule: {matched[0].raw}]"
-            elif rule is not None:
-                rule_suffix = f" [{rule.mode} ranges: {', '.join(e.raw for e in rule.ranges)}]"
-            else:
-                rule_suffix = ""
-
-            if permitted:
-                log.debug(f"allowed {path} (pid={pid}){rule_suffix}")
-            elif soft:
-                tag = "dry-run" if args.dry_run else "log-only"
-                log.warning(f"would deny {path} (pid={pid}) at {ts} [{tag}]{rule_suffix}")
-            else:
-                log.info(f"DENIED {path} (pid={pid}) at {ts}{rule_suffix}")
-
-            decision = FAN_ALLOW if (permitted or soft) else FAN_DENY
-            # respond before closing — kernel matches response by fd value
-            os.write(fan_fd, struct.pack(RESP_FMT, ev_fd, decision))
-            os.close(ev_fd)
+        handle_exec_events(data, rules, fan_fd, args.dry_run)
