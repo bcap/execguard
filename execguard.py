@@ -475,17 +475,26 @@ def main() -> None:
                 path = ""
 
             rule = rules.get(path)
-            permitted = is_permitted(rule, datetime.now()) if rule else True
+            now = datetime.now()
+            permitted = is_permitted(rule, now) if rule else True
             soft = args.dry_run or (rule is not None and rule.log_only)
-            ts = datetime.now().strftime("%H:%M")
+            ts = now.strftime("%H:%M")
+            matched = _matching_entries(rule, now) if rule else []
+            if matched:
+                verb = "allow" if rule.mode == "allowed" else "deny"
+                rule_suffix = f" [{verb} rule: {matched[0].raw}]"
+            elif rule is not None:
+                rule_suffix = f" [{rule.mode} ranges: {', '.join(e.raw for e in rule.ranges)}]"
+            else:
+                rule_suffix = ""
 
             if permitted:
-                log.debug(f"allowed {path} (pid={pid})")
+                log.debug(f"allowed {path} (pid={pid}){rule_suffix}")
             elif soft:
                 tag = "dry-run" if args.dry_run else "log-only"
-                log.warning(f"would deny {path} (pid={pid}) at {ts} [{tag}]")
+                log.warning(f"would deny {path} (pid={pid}) at {ts} [{tag}]{rule_suffix}")
             else:
-                log.info(f"DENIED {path} (pid={pid}) at {ts}")
+                log.info(f"DENIED {path} (pid={pid}) at {ts}{rule_suffix}")
 
             decision = FAN_ALLOW if (permitted or soft) else FAN_DENY
             # respond before closing — kernel matches response by fd value
