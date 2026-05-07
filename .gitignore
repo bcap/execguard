@@ -1,7 +1,10 @@
+.venv/
+
 __pycache__/
 *.pyc
-.venv/
 .pytest_cache/
-.claude/tmp/
-execguard.dev.ini
 
+.claude/tmp/
+.claude/worktrees/
+
+execguard.dev.ini
