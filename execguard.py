@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """execguard-fanotify: block executable launches outside allowed hours using fanotify"""
+
 import argparse, os, sys, signal, struct, ctypes, configparser, logging
 from dataclasses import dataclass
 from datetime import datetime, time as Time
@@ -7,23 +8,33 @@ from typing import Literal
 
 DEFAULT_CONFIG_PATH = "/etc/execguard.ini"
 
-FAN_CLASS_CONTENT  = 0x00000004
-FAN_CLOEXEC        = 0x00000001
-FAN_OPEN_EXEC_PERM = 0x00040000
-FAN_MARK_ADD       = 0x00000001
-FAN_MARK_INODE     = 0x00000000
-FAN_ALLOW          = 0x01
-FAN_DENY           = 0x02
-AT_FDCWD           = -100
-O_RDONLY           = 0
-O_LARGEFILE        = 0x8000
+# fanotify constants defined at:
+#   https://elixir.bootlin.com/linux/latest/source/include/uapi/linux/fanotify.h
+# fanotify_init flags
+FAN_CLASS_CONTENT  = 0x00000004  # report content/permission events (required for PERM events)
+FAN_CLOEXEC        = 0x00000001  # set close-on-exec on the returned fanotify fd
+# fanotify_mark event mask
+FAN_OPEN_EXEC_PERM = 0x00040000  # intercept exec-open; kernel blocks caller until we respond
+# fanotify_mark flags
+FAN_MARK_ADD       = 0x00000001  # add to the mark set (vs remove)
+FAN_MARK_INODE     = 0x00000000  # mark a specific inode (vs mount or filesystem)
+# fanotify_response values
+FAN_ALLOW          = 0x01        # permit the exec
+FAN_DENY           = 0x02        # block the exec (EPERM returned to caller)
+# from os module — redeclared here for clarity at the fanotify call sites
+AT_FDCWD           = os.AT_FDCWD    # dirfd sentinel: interpret path relative to cwd
+O_RDONLY           = os.O_RDONLY    # event_f_flags for fanotify_init: open event fds read-only
+O_LARGEFILE        = os.O_LARGEFILE # event_f_flags for fanotify_init: allow large file offsets
 
-# struct fanotify_event_metadata { u32, u8, u8, u16, u64, s32, s32 } = 24 bytes
+# struct fanotify_event_metadata { u32 event_len, u8 vers, u8 reserved, u16 metadata_len, u64 mask, s32 fd, s32 pid }
+# struct.pack/unpack format: = native order no padding; I=u32 B=u8 B=u8 H=u16 Q=u64 i=s32 i=s32
 EVENT_FMT  = "=IBBHQii"
 EVENT_SIZE = struct.calcsize(EVENT_FMT)
-# struct fanotify_response { s32 fd, u32 response } = 8 bytes
+# struct fanotify_response { s32 fd, u32 response }
+# struct.pack/unpack format: = native order no padding; i=s32 I=u32
 RESP_FMT   = "=iI"
 
+# Defining C function signatures for fanotify syscalls via ctypes
 libc = ctypes.CDLL("libc.so.6", use_errno=True)
 libc.fanotify_init.restype  = ctypes.c_int
 libc.fanotify_init.argtypes = [ctypes.c_uint, ctypes.c_uint]
