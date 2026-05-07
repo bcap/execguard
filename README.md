@@ -17,8 +17,7 @@ sudo ./install.sh
 Edit `/etc/execguard.ini` to configure which programs to block and when (see [Config](#config) below), then start the service:
 
 ```sh
-sudo systemctl start execguard
-sudo systemctl enable execguard   # start automatically on boot
+sudo systemctl enable --now execguard
 ```
 
 To uninstall:
