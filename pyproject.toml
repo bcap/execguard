@@ -1,7 +1,14 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "execguard"
 version = "0.1.0"
 requires-python = ">=3.10"
+
+[project.scripts]
+execguard = "execguard:main"
 
 [dependency-groups]
 dev = [
