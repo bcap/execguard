@@ -1,16 +1,12 @@
 # execguard
 
-Blocks executable launches outside configured time windows using `fanotify(7)` `FAN_OPEN_EXEC_PERM`. No PATH manipulation or app environment modification — intercepts at the kernel exec path.
+Prevents specific programs from launching outside the hours you allow. Useful for parental controls, focus tools, or enforcing schedules on shared machines.
 
-## Requirements
+Works transparently — no changes to the blocked app, no PATH tricks. The program simply doesn't start if it's outside the allowed window.
 
-- Linux 5.0+ (for `FAN_OPEN_EXEC_PERM`)
-- Root / `CAP_SYS_ADMIN`
-- Python 3.10+, [uv](https://docs.astral.sh/uv/)
+**Requires:** Linux, root access
 
 ## Install
-
-Requires: Linux 5.0+, root, [uv](https://docs.astral.sh/uv/)
 
 ```sh
 git clone <repo>
@@ -18,10 +14,11 @@ cd execguard
 sudo ./install.sh
 ```
 
-Edit `/etc/execguard.ini`, then start the service:
+Edit `/etc/execguard.ini` to configure which programs to block and when (see [Config](#config) below), then start the service:
 
 ```sh
 sudo systemctl start execguard
+sudo systemctl enable execguard   # start automatically on boot
 ```
 
 To uninstall:
@@ -30,86 +27,96 @@ To uninstall:
 sudo ./uninstall.sh
 ```
 
-### Development (no systemd)
-
-Create a local config file, then run:
-
-```sh
-cp execguard.example.ini execguard.dev.ini
-# edit execguard.dev.ini as needed
-make run-dev
-```
-
 ## Config (`/etc/execguard.ini`)
 
-Section header is the absolute path to the binary (resolved via `realpath`).  
-Each section requires either `allowed` or `denied` (mutually exclusive). Each line under the key is one range entry. See `execguard.example.ini` for full examples.
-
-Range entry syntax (all fields except `HH:MM-HH:MM` are optional wildcards):
-
-```
-[Year] [Month[-Month]|Month,Month,...] [DayOfMonth[-Day]|Day,Day,... | Weekday[-Weekday]|Weekday,...] HH:MM-HH:MM
-```
+Each section is the full path to a program. Use `allowed` to permit only during certain hours, or `denied` to block during certain hours. Add `log-only = true` to log without actually blocking (useful for testing your config).
 
 ```ini
 [/usr/bin/steam]
-allowed = 18:00-22:00           ; permit only 18:00–22:00 daily
+allowed = 18:00-22:00           ; only allowed 6pm–10pm daily
 
 [/usr/bin/discord]
-denied = 09:00-17:00            ; block during school hours
+denied = 09:00-17:00            ; blocked during school hours
 log-only = true                 ; log would-deny but don't actually block
 
 [/usr/games/minecraft]
 denied =
-    Jan-Jun Mon-Fri 08:00-16:00
-    Aug-Dec Mon-Fri 08:00-16:00
-    22:00-06:00                 ; overnight every day
+    Mon-Fri 08:00-16:00         ; blocked on weekdays during the day
+    22:00-06:00                 ; blocked overnight every day
+
+[/usr/bin/firefox]
+allowed =
+    Mon-Fri 18:00-22:00         ; weeknights
+    Sat-Sun 08:00-22:00         ; weekends all day
 ```
 
-Overnight ranges (`22:00-06:00`) wrap midnight automatically.
+Overnight ranges like `22:00-06:00` wrap midnight automatically.
 
-Global log-only mode (never blocks, just logs):
-```sh
-uv run execguard --dry-run
+You can scope rules to specific months, days of the month, or even a single date:
+
+```ini
+[/usr/bin/steam]
+allowed =
+    Jan-Jun Mon-Fri 08:00-16:00 ; Jan through June, weekdays only
+    2027 Jan 10 09:00-10:00     ; one specific date and time
 ```
 
-Test config against a specific datetime (no root required):
-```sh
-uv run execguard --test "2027 Jan 10 09:15"
-uv run execguard --test "2026-05-07 14:30"
-```
+Reload config without restarting the service:
 
-Reload config without restart:
 ```sh
-systemctl reload execguard
+sudo systemctl reload execguard
 ```
 
 ## Logs
 
-When running under systemd, all decisions are written to the journal:
+When running as a service, decisions are written to the system journal:
 
 ```sh
 journalctl -u execguard -f
 ```
 
-Key log lines:
+To see only blocked attempts:
 
-| Event | Level | Example |
-|---|---|---|
-| Exec allowed | `DEBUG` | `allowed /usr/bin/steam (pid=12345)` |
-| Exec denied | `INFO` | `DENIED /usr/bin/steam (pid=12345) at 2026-05-07 22:31` |
-| Would-deny (log-only / dry-run) | `WARNING` | `would deny /usr/bin/steam (pid=12345) at 2026-05-07 22:31 [log-only]` |
-| Config reload | `INFO` | `config reloaded, watching 3 binaries` |
+```sh
+journalctl -u execguard | grep DENIED
+```
 
-Allowed events are `DEBUG` level (suppressed by default). To see them:
+## Development
+
+```sh
+cp execguard.example.ini execguard.dev.ini
+# edit execguard.dev.ini as needed
+make run-dev
+make test
+```
+
+Test your config against a specific date/time without needing root:
+
+```sh
+uv run execguard --test "2027 Jan 10 09:15"
+uv run execguard --test "2026-05-07 14:30"
+```
+
+Run in log-only mode globally (never blocks, just logs):
+
+```sh
+uv run execguard --dry-run
+```
+
+Show allowed events in addition to denials:
 
 ```sh
 uv run execguard --verbose
-# or in dev mode:
-make run-dev  # add --verbose to Makefile if needed
 ```
 
-Filter to denials only:
-```sh
-journalctl -u execguard -f | grep DENIED
+Full range entry syntax (all fields except `HH:MM-HH:MM` are optional wildcards):
+
 ```
+[Year] [Month[-Month]|Month,Month,...] [DayOfMonth[-Day]|Day,Day,... | Weekday[-Weekday]|Weekday,...] HH:MM-HH:MM
+```
+
+**Technical notes:**
+- Uses `fanotify(7)` `FAN_OPEN_EXEC_PERM` — intercepts at the kernel exec path
+- Requires Linux 5.0+, `CAP_SYS_ADMIN`, Python 3.10+, [uv](https://docs.astral.sh/uv/)
+- SIGHUP reloads config (`systemctl reload execguard`)
+- Enforcement is synchronous — the process blocks in kernel until the daemon responds
