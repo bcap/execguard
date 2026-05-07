@@ -10,26 +10,31 @@ Blocks executable launches outside configured time windows using `fanotify(7)` `
 
 ## Install
 
+Requires: Linux 5.0+, root, [uv](https://docs.astral.sh/uv/)
+
 ```sh
-# install entry point into a uv-managed venv
-uv sync
-
-# run directly
-sudo uv run execguard
-
-# or install system-wide
-uv tool install .
-sudo execguard
+git clone <repo>
+cd execguard
+sudo ./install.sh
 ```
 
-### Systemd
+Edit `/etc/execguard.ini`, then start the service:
 
 ```sh
-cp execguard.ini /etc/execguard.ini   # edit as needed
+sudo systemctl start execguard
+```
 
-cp execguard.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable --now execguard
+To uninstall:
+
+```sh
+sudo ./uninstall.sh
+```
+
+### Development (no systemd)
+
+```sh
+uv sync
+sudo uv run execguard
 ```
 
 ## Config (`/etc/execguard.ini`)

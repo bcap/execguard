@@ -8,11 +8,14 @@ Time-based executable guard — blocks configured binaries from launching outsid
 
 **Requires:** Linux 5.0+, root
 
-## Running
+## Deployment
 
 ```sh
-sudo uv run execguard
+sudo ./install.sh    # installs binary, service unit, example config
+sudo ./uninstall.sh  # removes binary and service unit (preserves /etc/execguard.ini)
 ```
+
+## Running (development)
 
 Reload config without restart (SIGHUP):
 ```sh
