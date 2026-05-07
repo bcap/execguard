@@ -37,6 +37,8 @@ class Rule:
     ranges: list[RangeEntry]
     mode: Literal["allowed", "denied"]
     log_only: bool
+    kill: bool = True                  # send SIGTERM to running denied processes
+    kill_grace: int | None = None      # seconds before SIGKILL; None = never SIGKILL
 
 
 def _expand_name_list(s: str, table: dict[str, int], field: str) -> set[int]:
@@ -228,7 +230,16 @@ def load_config(config_path: str) -> dict[str, Rule]:
             ranges = parse_ranges(cfg[section]["denied"])
             mode = "denied"
         log_only = cfg[section].getboolean("log-only", fallback=False)
-        rule = Rule(name=section, ranges=ranges, mode=mode, log_only=log_only)
+        kill = cfg[section].getboolean("kill", fallback=True)
+        kill_grace: int | None = None
+        if raw_grace := cfg[section].get("kill-grace"):
+            try:
+                kill_grace = int(raw_grace.strip())
+            except ValueError as exc:
+                raise ValueError(f"[{section}]: invalid kill-grace value '{raw_grace.strip()}'") from exc
+            if kill_grace <= 0:
+                raise ValueError(f"[{section}]: kill-grace must be a positive integer")
+        rule = Rule(name=section, ranges=ranges, mode=mode, log_only=log_only, kill=kill, kill_grace=kill_grace)
 
         for raw_path in raw_paths:
             resolved = os.path.realpath(raw_path)
