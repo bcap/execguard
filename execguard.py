@@ -223,6 +223,8 @@ def is_permitted(rule: Rule, dt: datetime) -> bool:
 
 
 def load_config(config_path: str) -> dict[str, Rule]:
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"config file not found: {config_path}")
     cfg = configparser.ConfigParser()
     cfg.read(config_path)
     rules: dict[str, Rule] = {}
@@ -416,7 +418,10 @@ def main() -> None:
             dt = parse_test_datetime(args.test)
         except ValueError as exc:
             sys.exit(f"error: {exc}")
-        run_test_mode(args.config, dt)
+        try:
+            run_test_mode(args.config, dt)
+        except FileNotFoundError as exc:
+            sys.exit(f"error: {exc}")
         return
 
     if args.dry_run:
@@ -425,7 +430,10 @@ def main() -> None:
     if os.geteuid() != 0:
         sys.exit("error: must run as root")
 
-    rules = load_config(args.config)
+    try:
+        rules = load_config(args.config)
+    except FileNotFoundError as exc:
+        sys.exit(f"error: {exc}")
     fan_fd = make_fan_fd()
     setup_watches(fan_fd, list(rules.keys()))
     signal.signal(signal.SIGHUP, handle_sighup)
@@ -434,11 +442,16 @@ def main() -> None:
     while True:
         if reload_flag:
             reload_flag = False
-            os.close(fan_fd)
-            rules = load_config(args.config)
-            fan_fd = make_fan_fd()
-            setup_watches(fan_fd, list(rules.keys()))
-            log.info(f"config reloaded, watching {len(rules)} binaries")
+            try:
+                new_rules = load_config(args.config)
+            except (FileNotFoundError, ValueError) as exc:
+                log.error(f"config reload failed, keeping current rules: {exc}")
+            else:
+                os.close(fan_fd)
+                rules = new_rules
+                fan_fd = make_fan_fd()
+                setup_watches(fan_fd, list(rules.keys()))
+                log.info(f"config reloaded, watching {len(rules)} binaries")
 
         try:
             data = os.read(fan_fd, 4096)
