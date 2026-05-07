@@ -83,3 +83,33 @@ Reload config without restart:
 ```sh
 systemctl reload execguard
 ```
+
+## Logs
+
+When running under systemd, all decisions are written to the journal:
+
+```sh
+journalctl -u execguard -f
+```
+
+Key log lines:
+
+| Event | Level | Example |
+|---|---|---|
+| Exec allowed | `DEBUG` | `allowed /usr/bin/steam (pid=12345)` |
+| Exec denied | `INFO` | `DENIED /usr/bin/steam (pid=12345) at 2026-05-07 22:31` |
+| Would-deny (log-only / dry-run) | `WARNING` | `would deny /usr/bin/steam (pid=12345) at 2026-05-07 22:31 [log-only]` |
+| Config reload | `INFO` | `config reloaded, watching 3 binaries` |
+
+Allowed events are `DEBUG` level (suppressed by default). To see them:
+
+```sh
+uv run execguard --verbose
+# or in dev mode:
+make run-dev  # add --verbose to Makefile if needed
+```
+
+Filter to denials only:
+```sh
+journalctl -u execguard -f | grep DENIED
+```
