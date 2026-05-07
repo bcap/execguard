@@ -276,7 +276,130 @@ def parse_args() -> argparse.Namespace:
                    help="increase verbosity (-v: DEBUG)")
     p.add_argument("--dry-run", "-n", action="store_true",
                    help="log would-deny decisions but always allow (overrides per-rule log-only)")
+    p.add_argument("--test", metavar="DATETIME",
+                   help="evaluate config at given datetime and print results; no daemon, no root required. "
+                        "Formats: 'YYYY-MM-DD HH:MM' or 'YYYY Mon DD HH:MM'")
     return p.parse_args()
+
+
+def parse_test_datetime(s: str) -> datetime:
+    """Parse a datetime string in ISO or config syntax format.
+
+    Accepted formats:
+    - ISO: YYYY-MM-DD HH:MM
+    - Config syntax: YYYY Mon DD HH:MM (same tokens as range entries, no weekday)
+    """
+    # Try ISO format first
+    try:
+        return datetime.strptime(s.strip(), "%Y-%m-%d %H:%M")
+    except ValueError:
+        pass
+
+    # Try config syntax: tokenize and classify
+    tokens = s.strip().split()
+    if len(tokens) != 4:
+        raise ValueError(
+            f"invalid datetime '{s}': expected 'YYYY-MM-DD HH:MM' or 'YYYY Mon DD HH:MM'"
+        )
+
+    year_tok, month_tok, dom_tok, time_tok = tokens
+    try:
+        kinds = [_classify_token(t) for t in tokens]
+    except ValueError as exc:
+        raise ValueError(f"invalid datetime '{s}': {exc}") from exc
+
+    if "weekday" in kinds:
+        raise ValueError(
+            f"invalid datetime '{s}': weekday names are not allowed in --test datetime"
+        )
+
+    expected = ["year", "month", "dom", "time"]
+    if kinds != expected:
+        raise ValueError(
+            f"invalid datetime '{s}': expected tokens year month day time, "
+            f"got {' '.join(kinds)}"
+        )
+
+    try:
+        year = int(year_tok)
+        month = next(iter(_expand_name_list(month_tok, _MONTH_NAMES, "month")))
+        day = int(dom_tok)
+        t_start, _ = _parse_time_range(f"{time_tok}-00:00")
+    except ValueError as exc:
+        raise ValueError(f"invalid datetime '{s}': {exc}") from exc
+
+    # _parse_time_range needs a range; extract just the time we want
+    try:
+        t = datetime.strptime(time_tok, "%H:%M").time()
+    except ValueError as exc:
+        raise ValueError(f"invalid datetime '{s}': bad time '{time_tok}'") from exc
+
+    try:
+        return datetime(year, month, day, t.hour, t.minute)
+    except ValueError as exc:
+        raise ValueError(f"invalid datetime '{s}': {exc}") from exc
+
+
+def _matching_entries(rule: Rule, dt: datetime) -> list[RangeEntry]:
+    """Return RangeEntry items whose time window covers dt (mode-independent)."""
+    t = dt.time()
+    matched = []
+    for entry in rule.ranges:
+        if entry.year is not None and entry.year != dt.year:
+            continue
+        if entry.months is not None and dt.month not in entry.months:
+            continue
+        if entry.days_of_month is not None and dt.day not in entry.days_of_month:
+            continue
+        if entry.weekdays is not None and dt.weekday() not in entry.weekdays:
+            continue
+        if _in_time_range(entry.time_start, entry.time_end, t):
+            matched.append(entry)
+    return matched
+
+
+def run_test_mode(config_path: str, dt: datetime) -> None:
+    """Evaluate all rules against dt and print a decision table to stdout."""
+    rules = load_config(config_path)
+
+    header_dt = dt.strftime("%Y-%m-%d %H:%M")
+    print(f"Test datetime: {header_dt}\n")
+
+    col_binary  = "Binary"
+    col_decision = "Decision"
+    col_mode    = "Mode"
+    col_matched = "Matched Rules"
+
+    rows: list[tuple[str, str, str, str]] = []
+    for binary, rule in rules.items():
+        matched = _matching_entries(rule, dt)
+
+        if rule.mode == "allowed":
+            decision = "ALLOWED" if matched else "BLOCKED"
+        else:
+            decision = "BLOCKED" if matched else "ALLOWED"
+
+        if rule.log_only:
+            decision_col = f"{decision} [log-only]"
+        else:
+            decision_col = decision
+
+        matched_col = ", ".join(e.raw for e in matched) if matched else "(no match)"
+        rows.append((binary, decision_col, rule.mode, matched_col))
+
+    # compute column widths
+    w_binary   = max(len(col_binary),   max((len(r[0]) for r in rows), default=0))
+    w_decision = max(len(col_decision), max((len(r[1]) for r in rows), default=0))
+    w_mode     = max(len(col_mode),     max((len(r[2]) for r in rows), default=0))
+    w_matched  = max(len(col_matched),  max((len(r[3]) for r in rows), default=0))
+
+    fmt = f"{{:<{w_binary}}}  {{:<{w_decision}}}  {{:<{w_mode}}}  {{}}"
+    sep = f"{'─' * w_binary}  {'─' * w_decision}  {'─' * w_mode}  {'─' * w_matched}"
+
+    print(fmt.format(col_binary, col_decision, col_mode, col_matched))
+    print(sep)
+    for binary, decision_col, mode, matched_col in rows:
+        print(fmt.format(binary, decision_col, mode, matched_col))
 
 
 def main() -> None:
@@ -287,6 +410,14 @@ def main() -> None:
     level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(message)s",
                         stream=sys.stderr)
+
+    if args.test:
+        try:
+            dt = parse_test_datetime(args.test)
+        except ValueError as exc:
+            sys.exit(f"error: {exc}")
+        run_test_mode(args.config, dt)
+        return
 
     if args.dry_run:
         log.info("dry-run mode: all denials will be logged but not enforced")
