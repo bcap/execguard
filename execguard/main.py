@@ -105,12 +105,13 @@ def run_test_mode(config_path: str, dt: datetime) -> None:
     header_dt = dt.strftime("%Y-%m-%d %H:%M")
     print(f"Test datetime: {header_dt}\n")
 
+    col_group    = "Group"
     col_binary   = "Binary"
     col_decision = "Decision"
     col_mode     = "Mode"
     col_matched  = "Matched Rules"
 
-    rows: list[tuple[str, str, str, str]] = []
+    rows: list[tuple[str, str, str, str, str]] = []
     for binary, rule in rules.items():
         matched = _matching_entries(rule, dt)
 
@@ -121,20 +122,22 @@ def run_test_mode(config_path: str, dt: datetime) -> None:
 
         decision_col = f"{decision} [log-only]" if rule.log_only else decision
         matched_col = ", ".join(e.raw for e in matched) if matched else "(no match)"
-        rows.append((binary, decision_col, rule.mode, matched_col))
+        rows.append((rule.name, binary, decision_col, rule.mode, matched_col))
 
-    w_binary   = max(len(col_binary),   max((len(r[0]) for r in rows), default=0))
-    w_decision = max(len(col_decision), max((len(r[1]) for r in rows), default=0))
-    w_mode     = max(len(col_mode),     max((len(r[2]) for r in rows), default=0))
-    w_matched  = max(len(col_matched),  max((len(r[3]) for r in rows), default=0))
+    w_group    = max(len(col_group),    max((len(r[0]) for r in rows), default=0))
+    w_binary   = max(len(col_binary),   max((len(r[1]) for r in rows), default=0))
+    w_decision = max(len(col_decision), max((len(r[2]) for r in rows), default=0))
+    w_mode     = max(len(col_mode),     max((len(r[3]) for r in rows), default=0))
+    w_matched  = max(len(col_matched),  max((len(r[4]) for r in rows), default=0))
 
-    fmt = f"{{:<{w_binary}}}  {{:<{w_decision}}}  {{:<{w_mode}}}  {{}}"
-    sep = f"{'─' * w_binary}  {'─' * w_decision}  {'─' * w_mode}  {'─' * w_matched}"
+    fmt = f"{{:<{w_group}}}  {{:<{w_binary}}}  {{:<{w_decision}}}  {{:<{w_mode}}}  {{}}"
+    sep = (f"{'─' * w_group}  {'─' * w_binary}  {'─' * w_decision}  "
+           f"{'─' * w_mode}  {'─' * w_matched}")
 
-    print(fmt.format(col_binary, col_decision, col_mode, col_matched))
+    print(fmt.format(col_group, col_binary, col_decision, col_mode, col_matched))
     print(sep)
-    for binary, decision_col, mode, matched_col in rows:
-        print(fmt.format(binary, decision_col, mode, matched_col))
+    for group, binary, decision_col, mode, matched_col in rows:
+        print(fmt.format(group, binary, decision_col, mode, matched_col))
 
 
 def main() -> None:

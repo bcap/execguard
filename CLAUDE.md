@@ -37,7 +37,7 @@ uv run execguard --test "2026-05-07 14:30"
 
 ## Config format
 
-Each section is an absolute path to a binary. Use either `allowed` or `denied` (not both). `log-only` is optional.
+Two section forms. Single-binary (section name = path):
 
 ```ini
 [/absolute/path/to/binary]
@@ -51,14 +51,26 @@ denied = HH:MM-HH:MM                   ; block during range, permit outside
 log-only = true                         ; log would-deny but never actually block (default: false)
 ```
 
+Named group (section name = label, `paths` lists binaries):
+
+```ini
+[my-group]
+paths =
+    /usr/bin/binary-a
+    /usr/bin/binary-b
+allowed = Mon-Fri 18:00-22:00
+```
+
 Range entry syntax (all fields except `HH:MM-HH:MM` are optional wildcards):
 ```
 [Year] [Month[-Month]|Month,...] [DayOfMonth[-Dom]|Dom,... | Weekday[-Weekday]|Weekday,...] HH:MM-HH:MM
 ```
 
 - `allowed` and `denied` are mutually exclusive — error on both present
+- Section name is an absolute path → error if `paths` key also present
+- Same path in multiple sections → error at load time
 - Paths resolved via `realpath` at load time
-- Each line under `allowed`/`denied` is one range entry (configparser multi-line value)
+- Each line under `allowed`/`denied`/`paths` is one entry (configparser multi-line value)
 - Overnight ranges (`22:00-06:00`, start > end) wrap midnight automatically
 - `DayOfMonth` and `Weekday` are mutually exclusive per entry
 - `log-only` is per-rule; `--dry-run` CLI flag applies globally
@@ -74,7 +86,7 @@ Range entry syntax (all fields except `HH:MM-HH:MM` are optional wildcards):
 - `parse_ranges()` — splits on newlines, tokenizes each entry, returns `list[RangeEntry]`
 - `is_permitted(rule, dt)` — evaluates all `RangeEntry` items against `dt`; union match; handles both `allowed` and `denied` modes and overnight ranges
 - `RangeEntry` dataclass: `months`, `days_of_month`, `weekdays`, `year`, `time_start`, `time_end`, `raw`
-- `Rule` dataclass: `ranges: list[RangeEntry]`, `mode: Literal["allowed","denied"]`, `log_only: bool`
+- `Rule` dataclass: `name: str`, `ranges: list[RangeEntry]`, `mode: Literal["allowed","denied"]`, `log_only: bool`
 - `--test DATETIME`: loads config, evaluates all rules at the given datetime, prints table, exits — no fanotify, no root required
 - `parse_test_datetime()` — accepts ISO (`YYYY-MM-DD HH:MM`) or config syntax (`YYYY Mon DD HH:MM`)
 - SIGHUP handler sets a flag; main loop checks and reloads

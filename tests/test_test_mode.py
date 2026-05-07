@@ -126,7 +126,6 @@ allowed = 08:00-18:00
 
 
 def test_run_test_mode_multiple_rules(tmp_path, capsys) -> None:
-    # Use binaries that exist and have no symlink surprises — rely on realpath
     import os
     steam_path = os.path.realpath("/usr/bin/steam") if os.path.exists("/usr/bin/steam") else "/usr/bin/steam"
     discord_path = os.path.realpath("/usr/bin/discord") if os.path.exists("/usr/bin/discord") else "/usr/bin/discord"
@@ -141,3 +140,28 @@ denied = 09:00-17:00
     out = capsys.readouterr().out
     assert steam_path in out
     assert discord_path in out
+
+
+def test_run_test_mode_shows_group_column(tmp_path, capsys) -> None:
+    cfg = _write_config(tmp_path, """
+[/usr/bin/steam]
+allowed = 08:00-18:00
+""")
+    run_test_mode(cfg, datetime(2026, 5, 7, 12, 0))
+    out = capsys.readouterr().out
+    assert "Group" in out
+
+
+def test_run_test_mode_named_group_shows_group_name(tmp_path, capsys) -> None:
+    cfg = _write_config(tmp_path, """
+[my-games]
+paths =
+    /bin/true
+    /bin/false
+allowed = 08:00-18:00
+""")
+    run_test_mode(cfg, datetime(2026, 5, 7, 12, 0))
+    out = capsys.readouterr().out
+    assert "my-games" in out
+    assert "/bin/true" in out
+    assert "/bin/false" in out

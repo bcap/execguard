@@ -33,6 +33,7 @@ class RangeEntry:
 
 @dataclass
 class Rule:
+    name: str                          # section label or path for single-path sections
     ranges: list[RangeEntry]
     mode: Literal["allowed", "denied"]
     log_only: bool
@@ -196,14 +197,30 @@ def load_config(config_path: str) -> dict[str, Rule]:
     cfg = configparser.ConfigParser()
     cfg.read(config_path)
     rules: dict[str, Rule] = {}
+    seen_paths: dict[str, str] = {}  # resolved path → section name, for duplicate detection
     for section in cfg.sections():
-        path = os.path.realpath(section)
+        has_paths_key = "paths" in cfg[section]
+
+        if has_paths_key and os.path.isabs(section):
+            raise ValueError(
+                f"[{section}]: section name is an absolute path but 'paths' key is also present. "
+                f"When 'paths' is specified the section name must be a group label, not a path. "
+                f"Either remove 'paths' (single-binary section) or rename the section to a group label."
+            )
+
+        if has_paths_key:
+            raw_paths = [p.strip() for p in cfg[section]["paths"].splitlines() if p.strip()]
+            if not raw_paths:
+                raise ValueError(f"[{section}]: 'paths' key is present but empty")
+        else:
+            raw_paths = [section]
+
         has_allowed = "allowed" in cfg[section]
         has_denied = "denied" in cfg[section]
         if has_allowed and has_denied:
-            raise ValueError(f"{section}: cannot specify both 'allowed' and 'denied'")
+            raise ValueError(f"[{section}]: cannot specify both 'allowed' and 'denied'")
         if not has_allowed and not has_denied:
-            raise ValueError(f"{section}: must specify either 'allowed' or 'denied'")
+            raise ValueError(f"[{section}]: must specify either 'allowed' or 'denied'")
         if has_allowed:
             ranges = parse_ranges(cfg[section]["allowed"])
             mode: Literal["allowed", "denied"] = "allowed"
@@ -211,5 +228,16 @@ def load_config(config_path: str) -> dict[str, Rule]:
             ranges = parse_ranges(cfg[section]["denied"])
             mode = "denied"
         log_only = cfg[section].getboolean("log-only", fallback=False)
-        rules[path] = Rule(ranges=ranges, mode=mode, log_only=log_only)
+        rule = Rule(name=section, ranges=ranges, mode=mode, log_only=log_only)
+
+        for raw_path in raw_paths:
+            resolved = os.path.realpath(raw_path)
+            if resolved in seen_paths:
+                raise ValueError(
+                    f"[{section}]: path '{raw_path}' (resolved: '{resolved}') is already "
+                    f"registered by section [{seen_paths[resolved]}]"
+                )
+            seen_paths[resolved] = section
+            rules[resolved] = rule
+
     return rules

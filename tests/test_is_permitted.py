@@ -5,7 +5,7 @@ from datetime import time as Time
 
 
 def _rule(spec: str, mode: str = "allowed") -> Rule:
-    return Rule(ranges=parse_ranges(spec), mode=mode, log_only=False)
+    return Rule(name="test", ranges=parse_ranges(spec), mode=mode, log_only=False)
 
 
 def _dt(year: int, month: int, day: int, hour: int, minute: int) -> datetime:
@@ -149,3 +149,39 @@ def test_load_config_both_allowed_denied(tmp_path):
     cfg.write_text("[/bin/true]\nallowed = 08:00-16:00\ndenied = 20:00-22:00\n")
     with pytest.raises(ValueError, match="cannot specify both"):
         load_config(str(cfg))
+
+
+def test_load_config_abs_section_with_paths_key_errors(tmp_path):
+    from execguard import load_config
+    cfg = tmp_path / "bad.ini"
+    cfg.write_text("[/bin/true]\npaths = /bin/false\nallowed = 08:00-16:00\n")
+    with pytest.raises(ValueError, match="absolute path.*paths.*group label"):
+        load_config(str(cfg))
+
+
+def test_load_config_duplicate_path_across_sections_errors(tmp_path):
+    from execguard import load_config
+    cfg = tmp_path / "bad.ini"
+    cfg.write_text(
+        "[/bin/true]\nallowed = 08:00-16:00\n\n"
+        "[group-a]\npaths = /bin/true\nallowed = 09:00-17:00\n"
+    )
+    with pytest.raises(ValueError, match="already registered"):
+        load_config(str(cfg))
+
+
+def test_load_config_named_group_registers_multiple_paths(tmp_path):
+    import os
+    from execguard import load_config
+    cfg = tmp_path / "group.ini"
+    cfg.write_text(
+        "[my-games]\npaths =\n    /bin/true\n    /bin/false\nallowed = 08:00-16:00\n"
+    )
+    rules = load_config(str(cfg))
+    true_path = os.path.realpath("/bin/true")
+    false_path = os.path.realpath("/bin/false")
+    assert true_path in rules
+    assert false_path in rules
+    assert rules[true_path].name == "my-games"
+    assert rules[false_path].name == "my-games"
+    assert rules[true_path] is rules[false_path]
