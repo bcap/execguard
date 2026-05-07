@@ -4,7 +4,7 @@ test: setup
 	uv run pytest tests/
 
 run-dev: setup
-	sudo uv run execguard --config=execguard.dev.ini
+	sudo uv run execguard --config=execguard.dev.ini -v
 
 install: setup
 	sudo ./install.sh
@@ -12,7 +12,9 @@ install: setup
 uninstall:
 	sudo ./uninstall.sh
 
-setup: .venv/bin/python
+setup: .venv/pyvenv.cfg
+	@if [ ! -f execguard.dev.ini ]; then cp execguard.example.ini execguard.dev.ini; fi
 
-.venv/bin/python: pyproject.toml uv.lock
+.venv/pyvenv.cfg: pyproject.toml uv.lock
 	uv sync
+	@touch .venv/pyvenv.cfg
