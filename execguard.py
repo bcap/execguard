@@ -33,28 +33,192 @@ libc.fanotify_mark.argtypes = [ctypes.c_int, ctypes.c_uint, ctypes.c_uint64,
 
 log = logging.getLogger("execguard")
 
+# Month and weekday name → index mappings
+_MONTH_NAMES = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+_WEEKDAY_NAMES = {
+    "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
+}
+
+
+@dataclass
+class RangeEntry:
+    months: set[int] | None         # None = all months; 1-12
+    days_of_month: set[int] | None  # None = wildcard; mutually exclusive with weekdays
+    weekdays: set[int] | None       # None = wildcard; 0=Mon..6=Sun
+    year: int | None                # None = any year
+    time_start: Time
+    time_end: Time                  # if time_end < time_start → overnight range
+    raw: str                        # original text for display
+
 
 @dataclass
 class Rule:
-    ranges: list[tuple[Time, Time]]
+    ranges: list[RangeEntry]
     mode: Literal["allowed", "denied"]
     log_only: bool
 
 
-def parse_ranges(s: str) -> list[tuple[Time, Time]]:
-    ranges = []
+def _expand_name_list(s: str, table: dict[str, int], field: str) -> set[int]:
+    """Expand a comma/range expression of 3-letter names to a set of ints."""
+    result: set[int] = set()
     for part in s.split(","):
-        a, b = part.strip().split("-")
-        ranges.append((
-            datetime.strptime(a.strip(), "%H:%M").time(),
-            datetime.strptime(b.strip(), "%H:%M").time(),
-        ))
-    return ranges
+        part = part.strip()
+        if "-" in part:
+            a, _, b = part.partition("-")
+            ai = table.get(a.lower())
+            bi = table.get(b.lower())
+            if ai is None or bi is None:
+                raise ValueError(f"unknown {field} name in '{part}'")
+            # ranges wrap-around not needed for months/weekdays in practice,
+            # but handle ascending order only; spec doesn't require wrap
+            if ai > bi:
+                raise ValueError(f"{field} range '{part}' must be ascending")
+            result.update(range(ai, bi + 1))
+        else:
+            v = table.get(part.lower())
+            if v is None:
+                raise ValueError(f"unknown {field} name '{part}'")
+            result.add(v)
+    return result
 
 
-def is_permitted(rule: Rule) -> bool:
-    now = datetime.now().time()
-    in_range = any(s <= now <= e for s, e in rule.ranges)
+def _expand_int_list(s: str, field: str) -> set[int]:
+    """Expand a comma/range expression of integers to a set."""
+    result: set[int] = set()
+    for part in s.split(","):
+        part = part.strip()
+        if "-" in part:
+            a, _, b = part.partition("-")
+            try:
+                ai, bi = int(a), int(b)
+            except ValueError as exc:
+                raise ValueError(f"invalid {field} range '{part}'") from exc
+            if ai > bi:
+                raise ValueError(f"{field} range '{part}' must be ascending")
+            result.update(range(ai, bi + 1))
+        else:
+            try:
+                result.add(int(part))
+            except ValueError as exc:
+                raise ValueError(f"invalid {field} value '{part}'") from exc
+    return result
+
+
+def _parse_time_range(token: str) -> tuple[Time, Time]:
+    """Parse HH:MM-HH:MM token into (start, end) times."""
+    # token looks like "08:00-16:00" — split on last '-' that follows ':'
+    # simple approach: find the '-' that isn't part of HH:MM
+    idx = token.index("-", 3)  # first '-' after position 3 (past HH:M)
+    a, b = token[:idx], token[idx + 1:]
+    try:
+        return (
+            datetime.strptime(a, "%H:%M").time(),
+            datetime.strptime(b, "%H:%M").time(),
+        )
+    except ValueError as exc:
+        raise ValueError(f"invalid time range '{token}'") from exc
+
+
+def _classify_token(token: str) -> str:
+    """Return token type: 'year', 'month', 'weekday', 'dom', 'time'."""
+    lower = token.lower()
+    # Time: contains ':' (e.g. 08:00-16:00)
+    if ":" in token:
+        return "time"
+    # Year: exactly 4 digits
+    if token.isdigit() and len(token) == 4:
+        return "year"
+    # Weekday: starts with a known 3-letter day name
+    first_name = lower.split(",")[0].split("-")[0]
+    if first_name in _WEEKDAY_NAMES:
+        return "weekday"
+    # Month: starts with a known 3-letter month name
+    if first_name in _MONTH_NAMES:
+        return "month"
+    # Day-of-month: digits only (1-2 digit values, with possible comma/range separators)
+    dom_clean = token.replace(",", "").replace("-", "")
+    if dom_clean.isdigit():
+        return "dom"
+    raise ValueError(f"unrecognized token '{token}'")
+
+
+def _parse_entry(line: str) -> RangeEntry:
+    """Parse one range entry line into a RangeEntry."""
+    tokens = line.split()
+    if not tokens:
+        raise ValueError("empty range entry")
+
+    year: int | None = None
+    months: set[int] | None = None
+    days_of_month: set[int] | None = None
+    weekdays: set[int] | None = None
+    time_start: Time | None = None
+    time_end: Time | None = None
+
+    for token in tokens:
+        kind = _classify_token(token)
+        if kind == "time":
+            time_start, time_end = _parse_time_range(token)
+        elif kind == "year":
+            year = int(token)
+        elif kind == "month":
+            months = _expand_name_list(token, _MONTH_NAMES, "month")
+        elif kind == "weekday":
+            weekdays = _expand_name_list(token, _WEEKDAY_NAMES, "weekday")
+        elif kind == "dom":
+            days_of_month = _expand_int_list(token, "day-of-month")
+
+    if time_start is None or time_end is None:
+        raise ValueError(f"no time range found in entry '{line}'")
+    if days_of_month is not None and weekdays is not None:
+        raise ValueError(f"cannot specify both day-of-month and weekday in '{line}'")
+
+    return RangeEntry(
+        months=months,
+        days_of_month=days_of_month,
+        weekdays=weekdays,
+        year=year,
+        time_start=time_start,
+        time_end=time_end,
+        raw=line,
+    )
+
+
+def parse_ranges(s: str) -> list[RangeEntry]:
+    entries: list[RangeEntry] = []
+    for line in s.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        entries.append(_parse_entry(line))
+    return entries
+
+
+def _in_time_range(start: Time, end: Time, t: Time) -> bool:
+    if start <= end:
+        return start <= t <= end
+    # overnight: wraps midnight
+    return t >= start or t <= end
+
+
+def is_permitted(rule: Rule, dt: datetime) -> bool:
+    t = dt.time()
+    in_range = False
+    for entry in rule.ranges:
+        if entry.year is not None and entry.year != dt.year:
+            continue
+        if entry.months is not None and dt.month not in entry.months:
+            continue
+        if entry.days_of_month is not None and dt.day not in entry.days_of_month:
+            continue
+        if entry.weekdays is not None and dt.weekday() not in entry.weekdays:
+            continue
+        if _in_time_range(entry.time_start, entry.time_end, t):
+            in_range = True
+            break
     return in_range if rule.mode == "allowed" else not in_range
 
 
@@ -167,7 +331,7 @@ def main() -> None:
                 path = ""
 
             rule = rules.get(path)
-            permitted = is_permitted(rule) if rule else True
+            permitted = is_permitted(rule, datetime.now()) if rule else True
             soft = args.dry_run or (rule is not None and rule.log_only)
             ts = datetime.now().strftime("%H:%M")
 
