@@ -4,7 +4,7 @@ After=local-fs.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/execguard
+ExecStart=/usr/local/sbin/execguard
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 

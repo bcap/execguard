@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-UV_TOOL_BIN_DIR=/usr/local/bin uv tool install "$SCRIPT_DIR"
+UV_TOOL_BIN_DIR=/usr/local/sbin uv tool install "$SCRIPT_DIR"
 cp "$SCRIPT_DIR/execguard.service" /etc/systemd/system/execguard.service
 systemctl daemon-reload
 systemctl enable execguard
